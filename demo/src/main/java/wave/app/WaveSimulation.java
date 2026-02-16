@@ -1,0 +1,463 @@
+package wave.app;
+
+import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.scene.Scene;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.Slider;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
+import javafx.scene.shape.Line;
+import javafx.animation.AnimationTimer;
+import javafx.stage.Stage;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+
+public class WaveSimulation extends Application {
+    
+    private Pane mapPane;
+    private List<WaveSource> sources = new ArrayList<>();
+    private ConcurrentLinkedQueue<WaveFront> waveFronts = new ConcurrentLinkedQueue<>();
+    private List<WaveFront> wavesToRemove = new ArrayList<>();
+    private List<Wall> walls = new ArrayList<>();
+    
+    // Wave parameters
+    private double waveSpeed = 2.0;
+    private double reflectionCoeff = 0.7;  // 70% reflects
+    private double transmissionCoeff = 0.3; // 30% passes through
+    
+    // Wall drawing mode
+    private boolean wallDrawingMode = false;
+    
+    @Override
+    public void start(Stage primaryStage) {
+        // Main map pane
+        mapPane = new Pane();
+        mapPane.setStyle("-fx-background-color: #1a1a1a;");
+        mapPane.setPrefSize(800, 600);
+        
+        // Create some sample walls
+        createSampleWalls();
+        
+        // Create control panel
+        VBox controls = createControls();
+        
+        // Mouse click to add new wave source (when not in wall mode)
+        mapPane.setOnMouseClicked(this::handleMapClick);
+        
+        // Layout
+        BorderPane root = new BorderPane();
+        root.setCenter(mapPane);
+        root.setRight(controls);
+        
+        // Animation loop
+        AnimationTimer timer = new AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                updateWaves();
+                renderWaves();
+            }
+        };
+        timer.start();
+        
+        Scene scene = new Scene(root, 1000, 700);
+        primaryStage.setTitle("Wave Simulation");
+        primaryStage.setScene(scene);
+        primaryStage.show();
+    }
+    
+    private VBox createControls() {
+        VBox controls = new VBox(15);
+        controls.setStyle("-fx-padding: 20; -fx-background-color: #333;");
+        controls.setPrefWidth(250);
+        
+        // Title
+        Label title = new Label("Wave Controls");
+        title.setStyle("-fx-text-fill: white; -fx-font-size: 18; -fx-font-weight: bold;");
+        
+        // Wave speed slider
+        Label speedLabel = new Label("Wave Speed: 2.0");
+        speedLabel.setStyle("-fx-text-fill: white;");
+        Slider speedSlider = new Slider(0.5, 5.0, 2.0);
+        speedSlider.setShowTickLabels(true);
+        speedSlider.setShowTickMarks(true);
+        speedSlider.valueProperty().addListener((obs, old, val) -> {
+            waveSpeed = val.doubleValue();
+            speedLabel.setText(String.format("Wave Speed: %.1f", waveSpeed));
+        });
+        
+        // Reflection coefficient slider
+        Label reflectLabel = new Label("Reflection: 70%");
+        reflectLabel.setStyle("-fx-text-fill: white;");
+        Slider reflectSlider = new Slider(0, 100, 70);
+        reflectSlider.setShowTickLabels(true);
+        reflectSlider.setShowTickMarks(true);
+        reflectSlider.valueProperty().addListener((obs, old, val) -> {
+            reflectionCoeff = val.doubleValue() / 100.0;
+            reflectLabel.setText(String.format("Reflection: %.0f%%", val.doubleValue()));
+        });
+        
+        // Transmission coefficient slider
+        Label transmitLabel = new Label("Transmission: 30%");
+        transmitLabel.setStyle("-fx-text-fill: white;");
+        Slider transmitSlider = new Slider(0, 100, 30);
+        transmitSlider.setShowTickLabels(true);
+        transmitSlider.setShowTickMarks(true);
+        transmitSlider.valueProperty().addListener((obs, old, val) -> {
+            transmissionCoeff = val.doubleValue() / 100.0;
+            transmitLabel.setText(String.format("Transmission: %.0f%%", val.doubleValue()));
+        });
+        
+        // Wall mode toggle button
+        Button wallModeBtn = new Button("Enter Wall Mode");
+        wallModeBtn.setMaxWidth(Double.MAX_VALUE);
+        wallModeBtn.setOnAction(e -> {
+        wallDrawingMode = !wallDrawingMode;
+        if (wallDrawingMode) {
+            wallModeBtn.setText("Exit Wall Mode");
+            // FIX: Preserve background color when changing cursor
+            mapPane.setStyle("-fx-background-color: #1a1a1a; -fx-cursor: CROSSHAIR;");
+            // Enable wall drawing handlers
+            enableWallDrawing();
+        } else {
+            wallModeBtn.setText("Enter Wall Mode");
+            // FIX: Restore original style completely
+            mapPane.setStyle("-fx-background-color: #1a1a1a; -fx-cursor: DEFAULT;");
+            // Disable wall drawing and re-enable click handler
+            mapPane.setOnMousePressed(null);
+            mapPane.setOnMouseDragged(null);
+            mapPane.setOnMouseReleased(null);
+            mapPane.setOnMouseClicked(this::handleMapClick);
+        }
+        });
+        
+        // Clear all button
+        Button clearBtn = new Button("Clear All Waves");
+        clearBtn.setMaxWidth(Double.MAX_VALUE);
+        clearBtn.setOnAction(e -> {
+            waveFronts.clear();
+            Platform.runLater(() -> {
+                mapPane.getChildren().removeIf(node -> 
+                    node instanceof Circle && ((Circle) node).getFill() == Color.TRANSPARENT);
+            });
+        });
+        
+        // Reset button
+        Button resetBtn = new Button("Reset Simulation");
+        resetBtn.setMaxWidth(Double.MAX_VALUE);
+        resetBtn.setOnAction(e -> {
+            waveFronts.clear();
+            sources.clear();
+            walls.clear();
+            Platform.runLater(() -> {
+                mapPane.getChildren().clear();
+                createSampleWalls();
+            });
+        });
+
+        // Full reset button
+        Button fullReset = new Button("Full Reset Everything");
+        fullReset.setMaxWidth(Double.MAX_VALUE);
+        fullReset.setOnAction(e -> {
+            waveFronts.clear();
+            sources.clear();
+            walls.clear();
+            Platform.runLater(() -> {
+                mapPane.getChildren().clear();
+            });
+        });
+        
+        controls.getChildren().addAll(
+            title,
+            new Label(" "),
+            speedLabel, speedSlider,
+            reflectLabel, reflectSlider,
+            transmitLabel, transmitSlider,
+            new Label(" "),
+            wallModeBtn,
+            clearBtn,
+            resetBtn,
+            fullReset
+        );
+        
+        return controls;
+    }
+    
+    private void enableWallDrawing() {
+        final double[] startPoint = new double[2];
+        
+        mapPane.setOnMousePressed(e -> {
+            startPoint[0] = e.getX();
+            startPoint[1] = e.getY();
+        });
+        
+        mapPane.setOnMouseReleased(e -> {
+            addWall(startPoint[0], startPoint[1], e.getX(), e.getY());
+        });
+    }
+    
+    private void createSampleWalls() {
+        // Create some interesting wall configurations
+        addWall(200, 100, 200, 500);      // Vertical wall left
+        addWall(600, 100, 600, 500);      // Vertical wall right
+        addWall(100, 300, 700, 300);      // Horizontal wall middle
+        addWall(400, 200, 400, 400);      // Vertical wall center
+        addWall(100, 500, 300, 300);      // Diagonal wall
+        
+        // Add some wave sources
+        addWaveSource(300, 250, Color.RED);
+        addWaveSource(500, 350, Color.BLUE);
+    }
+    
+    private void addWall(double x1, double y1, double x2, double y2) {
+        Wall wall = new Wall(x1, y1, x2, y2);
+        walls.add(wall);
+        
+        // Visual representation
+        Line line = new Line(x1, y1, x2, y2);
+        line.setStroke(Color.WHITE);
+        line.setStrokeWidth(3);
+        
+        Platform.runLater(() -> mapPane.getChildren().add(line));
+    }
+    
+    private void addWaveSource(double x, double y, Color color) {
+        WaveSource source = new WaveSource(x, y);
+        sources.add(source);
+        
+        // Visual dot
+        Circle dot = new Circle(x, y, 8);
+        dot.setFill(color);
+        dot.setStroke(Color.WHITE);
+        dot.setStrokeWidth(2);
+        
+        // Make draggable
+        makeDraggable(dot, source);
+        
+        Platform.runLater(() -> mapPane.getChildren().add(dot));
+    }
+    
+    private void makeDraggable(Circle dot, WaveSource source) {
+        final double[] dragDelta = new double[2];
+        
+        dot.setOnMousePressed(e -> {
+            dragDelta[0] = dot.getCenterX() - e.getX();
+            dragDelta[1] = dot.getCenterY() - e.getY();
+        });
+        
+        dot.setOnMouseDragged(e -> {
+            dot.setCenterX(e.getX() + dragDelta[0]);
+            dot.setCenterY(e.getY() + dragDelta[1]);
+            source.x = dot.getCenterX();
+            source.y = dot.getCenterY();
+        });
+    }
+    
+    private void handleMapClick(javafx.scene.input.MouseEvent e) {
+        if (!wallDrawingMode) {
+            addWaveSource(e.getX(), e.getY(), Color.GREEN);
+        }
+    }
+    
+    private void updateWaves() {
+        // Create new wave fronts from sources
+        for (WaveSource source : sources) {
+            source.frameCounter++;
+            if (source.frameCounter >= source.emitRate) {
+                source.frameCounter = 0;
+                
+                // Emit waves in multiple directions for more realistic effect
+                for (int i = 0; i < 36; i++) {
+                    double angle = (i * 10) * Math.PI / 180;
+                    // Directly add to concurrent queue - safe!
+                    waveFronts.add(new WaveFront(
+                        source.x, source.y, angle, 1.0, 0
+                    ));
+                }
+            }
+        }
+        
+        // Clear removal list
+        wavesToRemove.clear();
+        
+        // Update existing wave fronts
+        for (WaveFront wave : waveFronts) {
+            // Store previous position for collision detection
+            double prevX = wave.x;
+            double prevY = wave.y;
+            
+            // Move wave
+            double dx = Math.cos(wave.angle) * waveSpeed;
+            double dy = Math.sin(wave.angle) * waveSpeed;
+            wave.x += dx;
+            wave.y += dy;
+            wave.age++;
+            wave.amplitude *= 0.99; // Natural decay
+            
+            // Check wall collisions
+            boolean collided = false;
+            for (Wall wall : walls) {
+                if (checkCollision(prevX, prevY, wave.x, wave.y, wall)) {
+                    // Handle collision - this will ADD new waves to the queue
+                    handleCollision(wave, wall);
+                    collided = true;
+                    break;
+                }
+            }
+            
+            // Mark for removal if collided or too old
+            if (collided || wave.age > 200 || wave.amplitude < 0.05) {
+                wavesToRemove.add(wave);
+            }
+        }
+        
+        // Remove all marked waves
+        waveFronts.removeAll(wavesToRemove);
+    }
+    
+    private boolean checkCollision(double x1, double y1, double x2, double y2, Wall wall) {
+        return lineIntersection(x1, y1, x2, y2, 
+                                wall.x1, wall.y1, wall.x2, wall.y2) != null;
+    }
+    
+    private double[] lineIntersection(double x1, double y1, double x2, double y2,
+                                      double x3, double y3, double x4, double y4) {
+        double denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+        if (denom == 0) return null;
+        
+        double t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+        double u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+        
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+            return new double[]{x1 + t * (x2 - x1), y1 + t * (y2 - y1)};
+        }
+        return null;
+    }
+    
+    private void handleCollision(WaveFront wave, Wall wall) {
+        // Calculate direction vector
+        double dx = Math.cos(wave.angle);
+        double dy = Math.sin(wave.angle);
+        
+        // Calculate reflection angle
+        double nx = wall.normalX;
+        double ny = wall.normalY;
+        
+        // Dot product
+        double dot = dx * nx + dy * ny;
+        
+        // Reflection vector: R = V - 2*(V·N)*N
+        double reflectX = dx - 2 * dot * nx;
+        double reflectY = dy - 2 * dot * ny;
+        double reflectAngle = Math.atan2(reflectY, reflectX);
+        
+        // Create reflected wave - DIRECT ADD to concurrent queue!
+        if (reflectionCoeff > 0 && wave.generation < 3) {
+            waveFronts.add(new WaveFront(
+                wave.x, wave.y, 
+                reflectAngle, 
+                wave.amplitude * reflectionCoeff,
+                wave.generation + 1
+            ));
+        }
+        
+        // Create transmitted wave - DIRECT ADD to concurrent queue!
+        if (transmissionCoeff > 0) {
+            waveFronts.add(new WaveFront(
+                wave.x, wave.y,
+                wave.angle,
+                wave.amplitude * transmissionCoeff,
+                wave.generation + 1
+            ));
+        }
+    }
+    
+    private void renderWaves() {
+        // This runs on the animation thread, so we need Platform.runLater for UI updates
+        Platform.runLater(() -> {
+            // Remove old wave circles
+            mapPane.getChildren().removeIf(node -> 
+                node instanceof Circle && ((Circle) node).getFill() == Color.TRANSPARENT);
+            
+            // Draw current wave fronts
+            for (WaveFront wave : waveFronts) {
+                Circle circle = new Circle(wave.x, wave.y, 3);
+                circle.setFill(Color.TRANSPARENT);
+                
+                // Color based on amplitude and generation
+                Color color = Color.CYAN.deriveColor(
+                    0, 1, 1, 
+                    Math.min(1, wave.amplitude)
+                );
+                
+                if (wave.generation == 1) color = Color.YELLOW.deriveColor(0, 1, 1, wave.amplitude);
+                if (wave.generation == 2) color = Color.ORANGE.deriveColor(0, 1, 1, wave.amplitude);
+                if (wave.generation >= 3) color = Color.RED.deriveColor(0, 1, 1, wave.amplitude);
+                
+                circle.setStroke(color);
+                circle.setStrokeWidth(1.5);
+                
+                mapPane.getChildren().add(circle);
+            }
+        });
+    }
+    
+    // Inner classes
+    class WaveSource {
+        double x, y;
+        int emitRate = 5; // Emit wave every 5 frames
+        int frameCounter = 0;
+        
+        WaveSource(double x, double y) {
+            this.x = x;
+            this.y = y;
+        }
+    }
+    
+    class WaveFront {
+        double x, y;
+        double angle;
+        int age = 0;
+        double amplitude;
+        int generation; // Track number of reflections
+        
+        WaveFront(double x, double y, double angle, double amplitude, int generation) {
+            this.x = x;
+            this.y = y;
+            this.angle = angle;
+            this.amplitude = amplitude;
+            this.generation = generation;
+        }
+    }
+    
+    class Wall {
+        double x1, y1, x2, y2;
+        double normalX, normalY;
+        double length;
+        
+        Wall(double x1, double y1, double x2, double y2) {
+            this.x1 = x1;
+            this.y1 = y1;
+            this.x2 = x2;
+            this.y2 = y2;
+            
+            // Calculate wall vector and normal
+            double dx = x2 - x1;
+            double dy = y2 - y1;
+            this.length = Math.sqrt(dx * dx + dy * dy);
+            
+            // Normal vector (perpendicular to wall)
+            this.normalX = -dy / length;
+            this.normalY = dx / length;
+        }
+    }
+    
+    public static void main(String[] args) {
+        launch(args);
+    }
+}
