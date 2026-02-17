@@ -272,8 +272,9 @@ public class WaveSimulation extends Application {
                 source.frameCounter = 0;
                 
                 // Emit waves in multiple directions for more realistic effect
-                for (int i = 0; i < 36; i++) {
-                    double angle = (i * 10) * Math.PI / 180;
+                // was this: for (int i = 0; i < 36; i++) {
+                for (int i = 0; i < 72; i++) {
+                    double angle = (i * 5) * Math.PI / 180;  // was: double angle = (i * 10) * Math.PI / 180; 
                     // Directly add to concurrent queue - safe!
                     waveFronts.add(new WaveFront(
                         source.x, source.y, angle, 1.0, 0
@@ -407,6 +408,7 @@ public class WaveSimulation extends Application {
         });
     }
     
+    /* 
     // Inner classes
     class WaveSource {
         double x, y;
@@ -417,7 +419,7 @@ public class WaveSimulation extends Application {
             this.x = x;
             this.y = y;
         }
-    }
+    } 
     
     class WaveFront {
         double x, y;
@@ -433,7 +435,7 @@ public class WaveSimulation extends Application {
             this.amplitude = amplitude;
             this.generation = generation;
         }
-    }
+    } 
     
     class Wall {
         double x1, y1, x2, y2;
@@ -455,7 +457,7 @@ public class WaveSimulation extends Application {
             this.normalX = -dy / length;
             this.normalY = dx / length;
         }
-    }
+    } */
     
     public static void main(String[] args) {
         launch(args);
